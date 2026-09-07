@@ -794,7 +794,7 @@ def main() -> int:
     parser.add_argument(
         "--emit-jobs",
         action="store_true",
-        help="Write per-locale translation jobs (max 100 keys each) and print a manifest. Translators read the job files; they do not edit catalogs.",
+        help="Write per-locale translation jobs (max 100 keys each) and print a manifest.",
     )
     parser.add_argument(
         "--jobs-dir",

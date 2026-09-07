@@ -385,7 +385,7 @@ def parse_tokens(tokens: list[str], cwd: Path) -> tuple[set[str], list[Path]]:
         path = raw if raw.is_absolute() else (cwd / raw)
         path = path.resolve()
         if not path.exists():
-            print(f"discover-copy-shards: path not found: {path}", file=sys.stderr)
+            print(f"Path not found: {path}. Check the path and try again.", file=sys.stderr)
             continue
         if path.is_file():
             path = path.parent
@@ -965,7 +965,7 @@ def detect_checks(root: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Discover UI copy shards. Tokens are dest classifiers and/or roots."
+        description="Find user-facing copy. Pass dest classifiers and/or project paths."
     )
     parser.add_argument("tokens", nargs="*", help="Dest classifiers and/or paths")
     parser.add_argument("--cwd", default=os.getcwd(), help="Working directory")
@@ -973,7 +973,7 @@ def main() -> int:
         "--dest",
         action="append",
         default=[],
-        help="Dest classifier (repeatable). Same tokens as positional dests.",
+        help="Dest classifier (repeatable). Same values as the positional arguments.",
     )
     parser.add_argument("--max-shards", type=int, default=MAX_SHARDS)
     parser.add_argument(
@@ -989,7 +989,7 @@ def main() -> int:
     for raw in args.dest:
         for part in raw.split(","):
             if part and not add_dest(dests, part):
-                print(f"discover-copy-shards: unknown dest: {part}", file=sys.stderr)
+                print(f"Unknown dest “{part}”. Use code, web, api, doc, catalog, or all.", file=sys.stderr)
     if not dests:
         dests.update(DEFAULT_DESTS)
 

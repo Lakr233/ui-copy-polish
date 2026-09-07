@@ -1,6 +1,6 @@
 # UI Copy Polish
 
-A skill that rewrites **user-facing copy** so it is written, short, and immediately understandable — then commits and pushes. It works on any codebase: an Xcode app, an npm / Node project, a Cargo or Go tool, a Django or Rails site, an Android or Flutter app, a .NET solution, a docs folder, or a monorepo mixing them.
+A skill that rewrites **user-facing copy** so it is short and clear, then commits and pushes. It works on any codebase: an Xcode app, an npm / Node project, a Cargo or Go tool, a Django or Rails site, an Android or Flutter app, a .NET solution, a docs folder, or a mixed monorepo.
 
 Pipeline:
 
@@ -19,7 +19,7 @@ git clone https://github.com/Lakr233/ui-copy-polish.git ~/.grok/skills/ui-copy-p
 git clone https://github.com/Lakr233/ui-copy-polish.git ~/.cursor/skills/ui-copy-polish
 ```
 
-Then run `/ui-copy-polish`. Hosts that match on description also pick it up for 过一遍文案, polish UI copy, 书面化.
+Then run `/ui-copy-polish`, or ask to polish UI copy, 过一遍文案, or 书面化.
 
 ## Usage
 
@@ -33,7 +33,7 @@ Then run `/ui-copy-polish`. Hosts that match on description also pick it up for 
 /ui-copy-polish all --locales en,zh-Hans,ja
 ```
 
-Dest classifiers split *what* is scanned. Remaining tokens are filesystem roots. A directory named like a dest token must be passed as a path (`./code`).
+Dest tokens choose *what* is scanned. Remaining tokens are filesystem roots. Pass a directory named like a dest token as a path (`./code`).
 
 | Dest | Scope |
 | --- | --- |
@@ -55,7 +55,7 @@ Dest classifiers split *what* is scanned. Remaining tokens are filesystem roots.
 
 Commits use explicit pathspecs. Other dirty files in the tree are left alone.
 
-## What it detects
+## What It Detects
 
 `scripts/discover-copy-shards.py` walks the roots and emits shards, catalogs, locales, git roots, and a cheap check per repo:
 
@@ -74,7 +74,7 @@ Commits use explicit pathspecs. Other dirty files in the tree are left alone.
 | PHP | `composer.json` | `php -l` |
 | Elixir | `mix.exs` | `mix compile` |
 
-Catalog formats the mergers complete (and `scripts/catalog-gaps.py` audits). Localization fans out: the gaps script emits one job per locale in chunks of at most 100 keys (`--emit-jobs --chunk-size 100`), a translator subagent handles each job, then one merger writes each catalog (every locale into one `.xcstrings` file).
+These catalog formats are filled in during localization (`scripts/catalog-gaps.py` audits them). Work is split into one job per locale, in chunks of at most 100 keys (`--emit-jobs --chunk-size 100`); each job is translated, then written back to its catalog.
 
 | Format | Layout |
 | --- | --- |
@@ -91,7 +91,7 @@ Catalog formats the mergers complete (and `scripts/catalog-gaps.py` audits). Loc
 
 Locales come from those catalogs (`sourceLanguage`, `.lproj` names, `values-xx`, file stems, `@@locale`, `target-language`). Each catalog is completed for the locales it already ships — an Android module with `en` + `ja` next to a web app with `en` + `zh-Hans` keeps both sets as they are. Pass `--locales` to demand one set everywhere. A project without catalogs is edited in its source language only. YAML catalogs use PyYAML when installed and a built-in subset parser otherwise.
 
-## What “good copy” means
+## What Good Copy Means
 
 See [`references/copy-bar.md`](references/copy-bar.md). In short:
 
