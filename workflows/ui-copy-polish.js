@@ -10,7 +10,7 @@ export const meta = {
     { title: 'Verify', detail: 'independently confirm each finding' },
     { title: 'Fix', detail: 'apply confirmed rewrites' },
     { title: 'Review', detail: 'review edits and loop until clean (max 3 rounds)' },
-    { title: 'Localize', detail: 'complete every locale in every catalog' },
+    { title: 'Localize', detail: 'per-locale translators (≤100 keys), then merge each catalog' },
     { title: 'Ship', detail: 'cheap checks, commit by pathspec, push' },
   ],
 }
@@ -42,7 +42,49 @@ const FIX_SCHEMA = {
   },
 }
 const REVIEW_SCHEMA = { type: 'object', required: ['clean', 'remaining'], properties: { clean: { type: 'boolean' }, remaining: { type: 'array', maxItems: 20, items: FINDING } } }
-const LOCALIZE_SCHEMA = { type: 'object', required: ['changed_files', 'filled'], properties: { changed_files: { type: 'array', items: { type: 'string' } }, filled: { type: 'integer' }, notes: { type: 'string' } } }
+const PLANNER_SCHEMA = {
+  type: 'object',
+  required: ['jobs'],
+  properties: {
+    work_dir: { type: 'string' },
+    jobs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'locale', 'path', 'count'],
+        properties: {
+          id: { type: 'string' },
+          locale: { type: 'string' },
+          chunk: { type: 'integer' },
+          path: { type: 'string' },
+          count: { type: 'integer' },
+        },
+      },
+    },
+    empty_keys: {
+      type: 'array',
+      items: { type: 'object', properties: { catalog: { type: 'string' }, key: { type: 'string' } } },
+    },
+    notes: { type: 'string' },
+  },
+}
+const TRANSLATOR_SCHEMA = {
+  type: 'object',
+  required: ['items'],
+  properties: {
+    locale: { type: 'string' },
+    items: {
+      type: 'array',
+      maxItems: 100,
+      items: {
+        type: 'object',
+        required: ['catalog', 'key', 'text'],
+        properties: { catalog: { type: 'string' }, key: { type: 'string' }, text: { type: 'string' } },
+      },
+    },
+  },
+}
+const MERGER_SCHEMA = { type: 'object', required: ['changed_files', 'filled'], properties: { changed_files: { type: 'array', items: { type: 'string' } }, filled: { type: 'integer' }, notes: { type: 'string' } } }
 const SHIP_SCHEMA = {
   type: 'object',
   required: ['commits'],
@@ -167,19 +209,56 @@ log(`${applied} rewrites applied in ${states.filter(st => st.applied > 0).length
 const gapsCmd = gapsScript && catalogs.length
   ? `python3 ${JSON.stringify(gapsScript)} --locales ${locales.join(',')} --source ${source}${strict ? ' --strict' : ''} ${catalogs.map(c => JSON.stringify(c)).join(' ')}`
   : ''
+const jobsCmd = gapsScript && catalogs.length
+  ? `python3 ${JSON.stringify(gapsScript)} --locales ${locales.join(',')} --source ${source}${strict ? ' --strict' : ''} --emit-jobs --chunk-size 100 ${catalogs.map(c => JSON.stringify(c)).join(' ')}`
+  : ''
 const localeRule = strict
   ? `Every catalog must carry every locale in LOCALES.`
-  : `Each catalog completes the locales it already ships (its locales_required in the report). Do not add a locale to a catalog that does not have it.`
+  : `Each catalog completes the locales it already ships. Do not add a locale to a catalog that does not have it.`
 
 phase('Localize')
 let localized = null
 if (catalogs.length) {
-  const p = intro('Localizer')
-    + `\nCATALOGS:\n${bullets(catalogs)}\nNEW KEYS FROM THIS RUN:\n${bullets(newKeys)}`
-    + (gapsCmd ? `\nRun this first, then fill every gap it lists, then run it again and report the result:\n${gapsCmd}` : '')
-    + `\n${localeRule}\nAlso grep the sources under ${JSON.stringify(gitRoots)} for lookup keys missing from the catalogs and add them. Delete an empty-string "" key. Keep each file's existing formatting; no unrelated churn.`
-  localized = await agent(p, { label: 'localize', phase: 'Localize', schema: LOCALIZE_SCHEMA })
-  if (localized) changed = uniq(changed.concat(localized.changed_files || []))
+  const plan = await agent(
+    intro('Planner')
+      + `\nCATALOGS:\n${bullets(catalogs)}\nNEW KEYS FROM THIS RUN:\n${bullets(newKeys)}\nRun this command. It writes one JSON job file per locale (chunks of at most 100 keys) and prints a manifest. Return that manifest. Do not translate. Do not edit catalogs.\n${jobsCmd}`,
+    { label: 'localize:plan', phase: 'Localize', schema: PLANNER_SCHEMA },
+  )
+  const jobs = ((plan && plan.jobs) || []).filter(j => j && j.path && j.id && locales.includes(j.locale))
+  log(`${jobs.length} translation jobs`)
+  const emptyKeys = (plan && plan.empty_keys) || []
+  const translations = []
+  const translated = await Promise.all(jobs.map(job => agent(
+    intro('Translator')
+      + `\nTARGET LOCALE: ${job.locale}\nJOB FILE: ${job.path}\nRead that JSON file with your tools. Translate every item into TARGET LOCALE. Return at most 100 items as {catalog, key, text}. Do not edit any catalog or other file. Keep interpolation tokens. Match the copy bar for this locale.\n`,
+    { label: `translate:${job.id}`, phase: 'Localize', schema: TRANSLATOR_SCHEMA, agentType: readOnlyAgent },
+  )))
+  jobs.forEach((job, i) => {
+    const rows = (translated[i] && translated[i].items) || []
+    let dropped = 0
+    let kept = 0
+    rows.forEach(item => {
+      if (kept >= 100) { dropped += 1; return }
+      if (!item || !item.catalog || !item.key || item.text == null) { dropped += 1; return }
+      translations.push({ catalog: item.catalog, key: item.key, text: item.text, locale: job.locale })
+      kept += 1
+    })
+    if (dropped) log(`dropped ${dropped} translation items from ${job.id}`)
+  })
+  const mergeCatalogs = uniq([
+    ...translations.map(t => t.catalog),
+    ...emptyKeys.map(k => k && k.catalog).filter(Boolean),
+    ...(newKeys.length ? catalogs : []),
+  ])
+  const merged = await Promise.all(mergeCatalogs.map(catalog => agent(
+    intro('Merger')
+      + `\nCATALOG: ${catalog}\nNEW KEYS FROM THIS RUN:\n${bullets(newKeys)}\nEMPTY KEYS TO DELETE:\n${JSON.stringify(emptyKeys.filter(k => k && k.catalog === catalog))}\nTRANSLATIONS TO WRITE (do not re-translate; write these values):\n${JSON.stringify(translations.filter(t => t.catalog === catalog))}\n`
+      + (gapsCmd ? `After writing, run this and report the result:\n${gapsCmd}\n` : '')
+      + `${localeRule}\nKeep each file's existing formatting; no unrelated churn. For .xcstrings merge every locale into this one file.\n`,
+    { label: `merge:${catalog}`, phase: 'Localize', schema: MERGER_SCHEMA },
+  )))
+  localized = { changed_files: uniq(merged.flatMap(m => (m && m.changed_files) || [])), filled: merged.reduce((n, m) => n + ((m && m.filled) || 0), 0) }
+  changed = uniq(changed.concat(localized.changed_files))
 }
 
 phase('Ship')

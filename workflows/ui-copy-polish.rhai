@@ -7,7 +7,7 @@ let meta = #{
         #{ title: "Verify", detail: "independently confirm each finding" },
         #{ title: "Fix", detail: "apply confirmed rewrites" },
         #{ title: "Review", detail: "review edits and loop until clean" },
-        #{ title: "Localize", detail: "complete every locale in every catalog" },
+        #{ title: "Localize", detail: "per-locale translators (≤100 keys), then merge each catalog" },
         #{ title: "Ship", detail: "cheap checks, commit by pathspec, push" },
     ],
 };
@@ -63,7 +63,61 @@ let review_schema = #{
     },
 };
 
-let localize_schema = #{
+let planner_schema = #{
+    "type": "object",
+    "required": ["jobs"],
+    "properties": #{
+        "work_dir": #{ "type": "string" },
+        "jobs": #{
+            "type": "array",
+            "items": #{
+                "type": "object",
+                "required": ["id", "locale", "path", "count"],
+                "properties": #{
+                    "id": #{ "type": "string" },
+                    "locale": #{ "type": "string" },
+                    "chunk": #{ "type": "integer" },
+                    "path": #{ "type": "string" },
+                    "count": #{ "type": "integer" },
+                },
+            },
+        },
+        "empty_keys": #{
+            "type": "array",
+            "items": #{
+                "type": "object",
+                "properties": #{
+                    "catalog": #{ "type": "string" },
+                    "key": #{ "type": "string" },
+                },
+            },
+        },
+        "notes": #{ "type": "string" },
+    },
+};
+
+let translator_schema = #{
+    "type": "object",
+    "required": ["items"],
+    "properties": #{
+        "locale": #{ "type": "string" },
+        "items": #{
+            "type": "array",
+            "maxItems": 100,
+            "items": #{
+                "type": "object",
+                "required": ["catalog", "key", "text"],
+                "properties": #{
+                    "catalog": #{ "type": "string" },
+                    "key": #{ "type": "string" },
+                    "text": #{ "type": "string" },
+                },
+            },
+        },
+    },
+};
+
+let merger_schema = #{
     "type": "object",
     "required": ["changed_files", "filled"],
     "properties": #{
@@ -252,6 +306,18 @@ fn review_prompt(ctx, shard, files_json) {
     p
 }
 
+fn min_int(a, b) {
+    if a < b { a } else { b }
+}
+
+fn known_locale(ctx, code) {
+    if code == () { return false; }
+    for loc in ctx.locales {
+        if loc == code { return true; }
+    }
+    false
+}
+
 fn gaps_command(ctx) {
     if ctx.gaps_script == "" || ctx.catalogs.len() == 0 { return ""; }
     let cmd = "python3 " + json_encode(ctx.gaps_script) + " --locales " + join_plain(ctx.locales, ",") + " --source " + ctx.source;
@@ -263,26 +329,105 @@ fn gaps_command(ctx) {
     cmd
 }
 
-fn localize_prompt(ctx, new_keys) {
-    let p = read_intro(ctx, "Localizer");
+fn jobs_command(ctx) {
+    if ctx.gaps_script == "" || ctx.catalogs.len() == 0 { return ""; }
+    let cmd = "python3 " + json_encode(ctx.gaps_script) + " --locales " + join_plain(ctx.locales, ",") + " --source " + ctx.source;
+    if ctx.strict { cmd += " --strict"; }
+    cmd += " --emit-jobs --chunk-size 100";
+    for c in ctx.catalogs {
+        cmd += " ";
+        cmd += json_encode(c);
+    }
+    cmd
+}
+
+fn planner_prompt(ctx, new_keys) {
+    let p = read_intro(ctx, "Planner");
     p += "\nCATALOGS:\n";
     p += join_bullets(ctx.catalogs);
     p += "\nNEW KEYS FROM THIS RUN:\n";
     p += join_bullets(new_keys);
+    let cmd = jobs_command(ctx);
+    p += "\nRun this command. It writes one JSON job file per locale (chunks of at most 100 keys) and prints a manifest. Return that manifest. Do not translate. Do not edit catalogs.\n";
+    p += cmd;
+    p
+}
+
+fn translator_prompt(ctx, job) {
+    let p = read_intro(ctx, "Translator");
+    p += "\nTARGET LOCALE: ";
+    p += job.locale;
+    p += "\nJOB FILE: ";
+    p += job.path;
+    p += "\nRead that JSON file with your tools. Translate every item into TARGET LOCALE. Return at most 100 items as {catalog, key, text}. Do not edit any catalog or other file. Keep interpolation tokens. Match the copy bar for this locale.\n";
+    p
+}
+
+fn merger_prompt(ctx, catalog, items_json, empty_keys_json, new_keys) {
+    let p = read_intro(ctx, "Merger");
+    p += "\nCATALOG: ";
+    p += catalog;
+    p += "\nNEW KEYS FROM THIS RUN:\n";
+    p += join_bullets(new_keys);
+    p += "\nEMPTY KEYS TO DELETE:\n";
+    p += empty_keys_json;
+    p += "\nTRANSLATIONS TO WRITE (do not re-translate; write these values):\n";
+    p += items_json;
     let cmd = gaps_command(ctx);
     if cmd != "" {
-        p += "\nRun this first, then fill every gap it lists, then run it again and report the result:\n";
+        p += "\nAfter writing, run this and report the result:\n";
         p += cmd;
     }
     if ctx.strict {
         p += "\nEvery catalog must carry every locale in LOCALES.";
     } else {
-        p += "\nEach catalog completes the locales it already ships (its locales_required in the report). Do not add a locale to a catalog that does not have it.";
+        p += "\nEach catalog completes the locales it already ships. Do not add a locale to a catalog that does not have it.";
     }
-    p += "\nAlso grep the sources under ";
-    p += json_encode(ctx.git_roots);
-    p += " for lookup keys missing from the catalogs and add them. Delete an empty-string \"\" key. Keep each file's existing formatting; no unrelated churn.";
+    p += "\nKeep each file's existing formatting; no unrelated churn. For .xcstrings merge every locale into this one file.\n";
     p
+}
+
+fn take_translations(job, output) {
+    let kept = [];
+    if output == () { return kept; }
+    let rows = output.items;
+    if rows == () { return kept; }
+    let dropped = 0;
+    for item in rows {
+        if kept.len() >= 100 {
+            dropped += 1;
+        } else if item == () || item.catalog == () || item.key == () || item.text == () {
+            dropped += 1;
+        } else {
+            kept.push(#{
+                catalog: item.catalog,
+                key: item.key,
+                text: item.text,
+                locale: job.locale,
+            });
+        }
+    }
+    if dropped > 0 {
+        log("dropped " + dropped.to_string() + " translation items from " + job.id);
+    }
+    kept
+}
+
+fn items_for_catalog(items, catalog) {
+    let kept = [];
+    for item in items {
+        if item.catalog == catalog { kept.push(item); }
+    }
+    kept
+}
+
+fn empty_keys_for_catalog(items, catalog) {
+    let kept = [];
+    if items == () { return kept; }
+    for item in items {
+        if item != () && item.catalog == catalog { kept.push(item); }
+    }
+    kept
 }
 
 fn ship_prompt(ctx, changed) {
@@ -534,16 +679,95 @@ for round_i in [1, 2, 3] {
 
 phase("Localize");
 if ctx.catalogs.len() > 0 {
-    let loc = agent(
-        localize_prompt(ctx, new_keys),
+    let plan = agent(
+        planner_prompt(ctx, new_keys),
         #{
-            label: "localize",
+            label: "localize:plan",
             capability_mode: "all",
-            output_schema: localize_schema,
+            output_schema: planner_schema,
         }
     );
-    if loc != () && loc.success && loc.output != () {
-        for path in take(loc.output, "changed_files") { changed = push_unique(changed, path); }
+    let jobs = [];
+    let empty_keys = [];
+    if plan != () && plan.success && plan.output != () {
+        empty_keys = take(plan.output, "empty_keys");
+        for job in take(plan.output, "jobs") {
+            if job != () && job.path != () && job.path != "" && job.id != () {
+                if known_locale(ctx, job.locale) {
+                    jobs.push(job);
+                } else {
+                    log("dropped out-of-locale job " + job.id);
+                }
+            }
+        }
+    }
+    log(jobs.len().to_string() + " translation jobs");
+
+    let translations = [];
+    let offset = 0;
+    for wave in [1, 2, 3, 4, 5, 6, 7, 8] {
+        if offset >= jobs.len() { break; }
+        let remaining = budget().remaining - 8;
+        if remaining < 1 {
+            log("no budget left for more translators");
+            break;
+        }
+        let take_n = min_int(remaining, min_int(32, jobs.len() - offset));
+        let batch = [];
+        let n = 0;
+        for job in jobs {
+            if n >= offset && batch.len() < take_n { batch.push(job); }
+            n += 1;
+        }
+        if batch.len() == 0 { break; }
+        let tjobs = [];
+        for job in batch {
+            tjobs.push(#{
+                prompt: translator_prompt(ctx, job),
+                label: "translate:" + job.id,
+                capability_mode: "read-only",
+                output_schema: translator_schema,
+            });
+        }
+        let tresults = parallel(tjobs);
+        let bi = 0;
+        for r in tresults {
+            if r != () && r.success && r.output != () {
+                for item in take_translations(batch[bi], r.output) { translations.push(item); }
+            }
+            bi += 1;
+        }
+        log("translate wave " + wave.to_string() + ": " + batch.len().to_string() + " jobs");
+        offset += batch.len();
+    }
+    if offset < jobs.len() {
+        log("dropped " + (jobs.len() - offset).to_string() + " translation jobs (budget)");
+    }
+
+    let merge_catalogs = [];
+    for item in translations { merge_catalogs = push_unique(merge_catalogs, item.catalog); }
+    for ek in empty_keys {
+        if ek != () && ek.catalog != () { merge_catalogs = push_unique(merge_catalogs, ek.catalog); }
+    }
+    if new_keys.len() > 0 {
+        for c in ctx.catalogs { merge_catalogs = push_unique(merge_catalogs, c); }
+    }
+    if merge_catalogs.len() > 0 {
+        let mjobs = [];
+        for catalog in merge_catalogs {
+            mjobs.push(#{
+                prompt: merger_prompt(ctx, catalog, json_encode(items_for_catalog(translations, catalog)), json_encode(empty_keys_for_catalog(empty_keys, catalog)), new_keys),
+                label: "merge:" + catalog,
+                capability_mode: "read-write",
+                output_schema: merger_schema,
+            });
+        }
+        let mresults = parallel(mjobs);
+        for r in mresults {
+            if r != () && r.success && r.output != () {
+                for path in take(r.output, "changed_files") { changed = push_unique(changed, path); }
+            }
+        }
     }
 }
 

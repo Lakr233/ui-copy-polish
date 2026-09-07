@@ -66,7 +66,7 @@ Build `args` = the discover JSON plus:
 
 Override `commit` / `push` from the flags. Then pick the engine for the host you are running in:
 
-**Grok** — copy the rhai script into the trusted workflow home and launch by name (`agent_budget: 128`):
+**Grok** — copy the rhai script into the trusted workflow home and launch by name (`agent_budget: 256`):
 
 ```bash
 mkdir -p "$HOME/.grok/workflows"
@@ -83,9 +83,9 @@ After launching, stop spawning your own finders/fixers. Do not poll. Tell the us
 
 The engine is:
 
-**find → verify → fix → review → fix (loop, max 3) → localize → commit → push**
+**find → verify → fix → review → fix (loop, max 3) → localize (plan → translate → merge) → commit → push**
 
-Each shard runs its own chain; fixers never edit outside their shard (or inside its `exclude` list), and only the localizer edits catalogs.
+Each shard runs its own chain; fixers never edit outside their shard (or inside its `exclude` list). Translators never edit catalogs. Only mergers write catalogs.
 
 ## Fallback (only if no workflow engine is available or it errors)
 
@@ -95,7 +95,10 @@ Reproduce the same phases with subagents. Cold-start every child: it must read t
 2. **Verify** — one read-only subagent per shard that returned findings. Keep only items with quoted evidence. Drop out-of-shard paths.
 3. **Fix** — one read-write subagent per shard with confirmed items. No worktree isolation. Confirmed replacements only. Non-catalog shards do not edit catalogs.
 4. **Review → fix loop** — one read-only reviewer per edited shard. If `remaining` is non-empty, fix those shards again. Stop after 3 rounds or when a round returns nothing new.
-5. **Localize** — one read-write agent. Run `catalog-gaps.py --locales <locales> --source <source> [--strict]` on every catalog, fill every `locales_required` locale, delete the empty `""` key, re-run until it reports zero gaps.
+5. **Localize** — do not fill catalogs in one agent.
+   1. Run `catalog-gaps.py --locales <locales> --source <source> [--strict] --emit-jobs --chunk-size 100` on every catalog. That writes one job file per locale chunk.
+   2. One read-only translator per job (one locale, ≤100 keys). Each returns JSON `{ locale, items: [{ catalog, key, text }] }`. They do not edit catalogs.
+   3. One read-write merger per catalog. Apply every translator item for that file (all locales merge into one `.xcstrings`), delete the empty `""` key, add `new_keys`, re-run the gaps script.
 6. **Ship** — one agent with shell access. Intersect this run's files with `git status --porcelain`. Run the `checks` commands for each git root that changed (plus the gaps script). `git commit -m "…" -- <paths>`. Push `HEAD` if `push` is true.
 
 Wait for each panel to finish before starting the next phase. Do not repair unrelated build breakage. Do not touch dirty files this run did not change.

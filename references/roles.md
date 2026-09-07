@@ -78,20 +78,43 @@ Return `clean=true` only when nothing remains. Otherwise `remaining` uses the sa
 
 ---
 
-## Localizer
+## Planner
 
-Operate on the given catalogs. Formats you may meet: `.xcstrings`, `<lang>.lproj/*.strings` + `.stringsdict`, Android `res/values[-<lang>]/strings.xml`, `locales/<lang>.json|.yml` (flat or nested, i18next / vue-i18n / Rails), Flutter `.arb`, `.resx`, Java `.properties`, gettext `.po`, `.xliff`, Fluent `.ftl`.
+Run the emit-jobs command in the prompt. It writes one JSON file per locale chunk (≤100 keys) and prints a manifest.
 
-- Run the gaps script from the prompt first. Fill every gap it lists. Re-run it at the end; the goal is zero gaps and zero errors.
-- Every key the app uses must have a value in every locale the report marks `locales_required` for that catalog (by default the locales that catalog already ships; with `--strict`, all of `LOCALES`). For `.xcstrings`, each unit is `state: translated`, non-empty.
+- Do not translate. Do not edit catalogs.
+- Return the manifest fields: `work_dir`, `jobs` (`id`, `locale`, `chunk`, `path`, `count`), `catalogs`, `empty_keys`.
+- `new_keys` in the prompt are source-locale keys the merger must add; list them in `notes` if the script cannot see them yet.
+
+Return `jobs`, `empty_keys`, `work_dir`, `notes`.
+
+---
+
+## Translator
+
+Translate one job file into one target locale. The file is at most 100 keys.
+
+- Read the job JSON (`locale`, `items[]` with `catalog`, `key`, `source`, `comment`). Read the copy bar for this locale.
+- Return `{ locale, items: [{ catalog, key, text }] }` — `text` is the translation. At most 100 items, one per input key.
+- Do not edit catalogs or any other file. Do not translate a different locale than `TARGET LOCALE`.
+- Keep interpolation and plural tokens. Match the source meaning and the copy bar. Written UI register for this language, same length class, native punctuation.
+
+---
+
+## Merger
+
+Apply finished translations into catalogs. You write files; you do not translate.
+
+Formats you may meet: `.xcstrings`, `<lang>.lproj/*.strings` + `.stringsdict`, Android `res/values[-<lang>]/strings.xml`, `locales/<lang>.json|.yml` (flat or nested, i18next / vue-i18n / Rails), Flutter `.arb`, `.resx`, Java `.properties`, gettext `.po`, `.xliff`, Fluent `.ftl`.
+
+- Write every `items` value into this catalog (or this catalog family) for its `locale`. For `.xcstrings`, merge every locale into that one file. For per-locale files, write the file for that locale (create it from the source file's shape if it does not exist).
 - Delete a catalog entry whose key is the empty string `""`.
-- New source-locale keys from this run (`new_keys` plus any lookup call you find missing) must be added with every locale.
-- Every translation must match the source meaning and the copy bar. Do not leave `needs_review` / empty / fuzzy values.
-- Preserve interpolation and plural syntax. Use positional arguments only when a locale needs to reorder them.
-- Keep the file's existing formatting (indentation, key order, trailing newline). Edit values; do not re-serialize the whole file with a different style. Do not rewrite keys you are not filling.
-- A locale file that does not exist yet (for example `zh-Hans.json` next to `en.json`) is created with the same shape as the source file.
+- Add `new_keys` as source-locale entries when they are missing.
+- Every key must have a value in every locale the catalog already ships (with `--strict`, all of `LOCALES`). For `.xcstrings`, each unit is `state: translated`, non-empty. Do not leave `needs_review` / empty / fuzzy values.
+- Preserve interpolation and plural syntax already in `text`. Keep the file's existing formatting (indentation, key order, trailing newline). Edit values; do not re-serialize the whole file with a different style. Do not rewrite keys you were not given.
+- Re-run the gaps script from the prompt at the end.
 
-Return `changed_files`, `filled` (count of keys completed), `notes`.
+Return `changed_files`, `filled` (count of keys written), `notes`.
 
 ---
 

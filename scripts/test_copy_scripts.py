@@ -467,5 +467,101 @@ class FamilyGaps(unittest.TestCase):
             self.assertEqual(len(report["errors"]), 1)
 
 
+class TranslationJobs(unittest.TestCase):
+    def test_jobs_are_grouped_by_locale_and_chunked(self):
+        items = []
+        for index in range(120):
+            items.append(
+                {
+                    "catalog": "/app/Localizable.xcstrings",
+                    "format": "xcstrings",
+                    "key": f"k{index}",
+                    "source": f"S{index}",
+                    "comment": "",
+                    "locale": "ja",
+                }
+            )
+        items.append(
+            {
+                "catalog": "/app/Localizable.xcstrings",
+                "format": "xcstrings",
+                "key": "only",
+                "source": "Only",
+                "comment": "",
+                "locale": "zh-Hans",
+            }
+        )
+        jobs = gaps.chunk_items(items, 100)
+        self.assertEqual([job["id"] for job in jobs], ["ja-0", "ja-1", "zh-Hans-0"])
+        self.assertEqual(jobs[0]["count"], 100)
+        self.assertEqual(jobs[1]["count"], 20)
+        self.assertEqual(jobs[2]["count"], 1)
+        self.assertEqual(jobs[1]["items"][0]["key"], "k100")
+        self.assertLessEqual(max(job["count"] for job in jobs), gaps.MAX_JOB_KEYS)
+
+    def test_chunk_size_clamps_to_100(self):
+        self.assertEqual(gaps.clamp_chunk_size(0), 1)
+        self.assertEqual(gaps.clamp_chunk_size(500), 100)
+
+    def test_emit_jobs_writes_manifest_and_skips_empty_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = touch(
+                root / "Localizable.xcstrings",
+                json.dumps(
+                    {
+                        "sourceLanguage": "en",
+                        "strings": {
+                            "": {"localizations": {"en": {"stringUnit": {"value": ""}}}},
+                            "Save": {
+                                "comment": "toolbar",
+                                "localizations": {
+                                    "en": {"stringUnit": {"value": "Save"}},
+                                    "zh-Hans": {"stringUnit": {"value": ""}},
+                                },
+                            },
+                            "Close": {"localizations": {"zh-Hans": {"stringUnit": {"value": "关闭"}}}},
+                        },
+                    }
+                ),
+            )
+            jobs_dir = root / "jobs"
+            items, empty_keys = gaps.collect_job_items([catalog], ["en", "zh-Hans"], "en", strict=False)
+            self.assertEqual(empty_keys, [{"catalog": str(catalog), "key": ""}])
+            self.assertEqual(
+                items,
+                [
+                    {
+                        "catalog": str(catalog),
+                        "format": "xcstrings",
+                        "key": "Save",
+                        "source": "Save",
+                        "comment": "toolbar",
+                        "locale": "zh-Hans",
+                    }
+                ],
+            )
+            jobs = gaps.chunk_items(items, 100)
+            manifest = gaps.write_jobs(jobs, jobs_dir, "en", empty_keys, [str(catalog)], 100)
+            self.assertEqual(manifest["chunk_size"], 100)
+            self.assertEqual(len(manifest["jobs"]), 1)
+            job_path = Path(manifest["jobs"][0]["path"])
+            payload = json.loads(job_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["locale"], "zh-Hans")
+            self.assertEqual(payload["items"][0]["source"], "Save")
+
+    def test_locale_dir_jobs_carry_source_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            en = touch(root / "locales" / "en.json", json.dumps({"save": "Save", "home": "Home"}))
+            zh = touch(root / "locales" / "zh-Hans.json", json.dumps({"save": "保存", "home": ""}))
+            items, empty_keys = gaps.collect_job_items([en, zh], ["en", "zh-Hans"], "en", strict=False)
+            self.assertEqual(empty_keys, [])
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["key"], "home")
+            self.assertEqual(items[0]["source"], "Home")
+            self.assertEqual(items[0]["locale"], "zh-Hans")
+
+
 if __name__ == "__main__":
     unittest.main()

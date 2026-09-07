@@ -18,6 +18,7 @@ Formats:
 Usage:
 
   catalog-gaps.py <catalog...> --locales en,zh-Hans [--source en] [--strict]
+  catalog-gaps.py <catalog...> --locales en,zh-Hans --emit-jobs [--jobs-dir DIR] [--chunk-size 100]
 
 Catalogs that belong to one family (same table across locale files) are
 grouped, so a key present in en.json but absent from zh-Hans.json is a gap.
@@ -25,7 +26,8 @@ By default a family only has to complete the locales it already ships (plus
 the source); --strict demands every --locales entry everywhere. Every report
 has: format, paths, locales_present, locales_required, keys, gaps[], and
 optional empty_key / missing_files / errors. JSON goes to stdout, a one-line
-summary to stderr.
+summary to stderr. `--emit-jobs` writes one JSON file per locale in chunks of
+at most 100 keys and prints a manifest for translator subagents.
 """
 
 from __future__ import annotations
@@ -34,8 +36,11 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 from xml.etree import ElementTree
+
+MAX_JOB_KEYS = 100
 
 LOCALE_DIR_NAMES = {
     "locales",
@@ -602,6 +607,180 @@ def build_reports(paths: list[Path], locales: list[str], source: str, strict: bo
     return reports
 
 
+def clamp_chunk_size(value: int) -> int:
+    if value < 1:
+        return 1
+    return min(value, MAX_JOB_KEYS)
+
+
+def source_from_xcstrings(entry: dict, source: str, key: str) -> tuple[str, str]:
+    comment = str(entry.get("comment") or "")
+    value = localized_value((entry.get("localizations") or {}).get(source) or {})
+    if value.strip():
+        return value, comment
+    return key, comment
+
+
+def source_from_tables(tables: dict[str, dict[str, str]], source: str, key: str) -> str:
+    value = (tables.get(source) or {}).get(key) or ""
+    if value.strip():
+        return value
+    for table in tables.values():
+        other = table.get(key) or ""
+        if other.strip():
+            return other
+    return key
+
+
+def tables_for_family(fmt: str, members: list[tuple[Path, str | None]], source: str) -> dict[str, dict[str, str]]:
+    tables: dict[str, dict[str, str]] = {}
+    for path, locale in members:
+        try:
+            table, extra = load_table(path, fmt, locale)
+        except Exception:  # noqa: BLE001 - skip unreadable members; reports already surface errors
+            continue
+        code = locale or extra.get("locale") or source
+        tables.setdefault(code, {}).update(table)
+    return tables
+
+
+def collect_job_items(paths: list[Path], locales: list[str], source: str, strict: bool) -> tuple[list[dict], list[dict]]:
+    """One item per (key, missing locale). Empty-string keys are listed separately for the merger."""
+    items: list[dict] = []
+    empty_keys: list[dict] = []
+    reports = build_reports(paths, locales, source, strict)
+    families: dict[tuple[str, str], list[tuple[Path, str | None]]] = {}
+    for path in paths:
+        if not path.is_file() or path.suffix == ".xcstrings":
+            continue
+        locale, fmt, family = locale_of(path)
+        families.setdefault((fmt, family), []).append((path, locale))
+
+    family_tables: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
+    for key, members in families.items():
+        family_tables[key] = tables_for_family(key[0], members, source)
+
+    for report in reports:
+        fmt = report.get("format")
+        if report.get("error") or not fmt:
+            continue
+        if fmt == "xcstrings":
+            catalog_path = report.get("path") or (report.get("paths") or [""])[0]
+            try:
+                catalog = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            strings = catalog.get("strings") or {}
+            for gap in report.get("gaps") or []:
+                key = gap.get("key", "")
+                if gap.get("issue") == "empty-key" or key == "":
+                    empty_keys.append({"catalog": catalog_path, "key": ""})
+                    continue
+                entry = strings.get(key) or {}
+                source_text, comment = source_from_xcstrings(entry, source, key)
+                for locale in gap.get("missing") or []:
+                    items.append(
+                        {
+                            "catalog": catalog_path,
+                            "format": "xcstrings",
+                            "key": key,
+                            "source": source_text,
+                            "comment": comment,
+                            "locale": locale,
+                        }
+                    )
+            continue
+
+        family = report.get("family") or ""
+        tables = family_tables.get((fmt, family), {})
+        catalog_path = (report.get("paths") or [family])[0]
+        for gap in report.get("gaps") or []:
+            key = gap.get("key", "")
+            if gap.get("issue") == "empty-key" or key == "":
+                empty_keys.append({"catalog": catalog_path, "key": ""})
+                continue
+            source_text = source_from_tables(tables, source, key)
+            for locale in gap.get("missing") or []:
+                items.append(
+                    {
+                        "catalog": catalog_path,
+                        "format": fmt,
+                        "family": family,
+                        "key": key,
+                        "source": source_text,
+                        "comment": "",
+                        "locale": locale,
+                    }
+                )
+    items.sort(key=lambda row: (row["locale"], row.get("catalog") or "", row.get("key") or ""))
+    return items, empty_keys
+
+
+def chunk_items(items: list[dict], chunk_size: int) -> list[dict]:
+    """Group by locale, then split each locale into chunks of at most chunk_size keys."""
+    size = clamp_chunk_size(chunk_size)
+    by_locale: dict[str, list[dict]] = {}
+    for item in items:
+        by_locale.setdefault(item["locale"], []).append(item)
+    jobs: list[dict] = []
+    for locale in sorted(by_locale):
+        rows = by_locale[locale]
+        for index in range(0, len(rows), size):
+            chunk = rows[index : index + size]
+            jobs.append(
+                {
+                    "id": f"{locale}-{index // size}",
+                    "locale": locale,
+                    "chunk": index // size,
+                    "count": len(chunk),
+                    "items": chunk,
+                }
+            )
+    return jobs
+
+
+def write_jobs(
+    jobs: list[dict],
+    jobs_dir: Path,
+    source: str,
+    empty_keys: list[dict],
+    catalogs: list[str],
+    chunk_size: int,
+) -> dict:
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    manifest_jobs: list[dict] = []
+    for job in jobs:
+        name = f"job-{job['id']}.json"
+        path = jobs_dir / name
+        payload = {
+            "id": job["id"],
+            "locale": job["locale"],
+            "chunk": job["chunk"],
+            "source_locale": source,
+            "items": job["items"],
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        manifest_jobs.append(
+            {
+                "id": job["id"],
+                "locale": job["locale"],
+                "chunk": job["chunk"],
+                "path": str(path),
+                "count": job["count"],
+            }
+        )
+    manifest = {
+        "source": source,
+        "chunk_size": chunk_size,
+        "work_dir": str(jobs_dir),
+        "jobs": manifest_jobs,
+        "catalogs": catalogs,
+        "empty_keys": empty_keys,
+    }
+    (jobs_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("catalogs", nargs="+")
@@ -612,10 +791,40 @@ def main() -> int:
         action="store_true",
         help="Require every --locales entry in every catalog. Default: each catalog only completes the locales it already ships.",
     )
+    parser.add_argument(
+        "--emit-jobs",
+        action="store_true",
+        help="Write per-locale translation jobs (max 100 keys each) and print a manifest. Translators read the job files; they do not edit catalogs.",
+    )
+    parser.add_argument(
+        "--jobs-dir",
+        default="",
+        help="Directory for --emit-jobs files (default: a new temp directory).",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=MAX_JOB_KEYS,
+        help=f"Keys per translation job (default {MAX_JOB_KEYS}, max {MAX_JOB_KEYS}).",
+    )
     args = parser.parse_args()
     locales = [item.strip() for item in args.locales.split(",") if item.strip()]
     source = args.source or (locales[0] if locales else "en")
-    reports = build_reports([Path(raw).expanduser() for raw in args.catalogs], locales, source, args.strict)
+    paths = [Path(raw).expanduser() for raw in args.catalogs]
+    if args.emit_jobs:
+        chunk_size = clamp_chunk_size(args.chunk_size)
+        items, empty_keys = collect_job_items(paths, locales, source, args.strict)
+        jobs = chunk_items(items, chunk_size)
+        jobs_dir = Path(args.jobs_dir).expanduser() if args.jobs_dir else Path(tempfile.mkdtemp(prefix="copy-jobs-"))
+        manifest = write_jobs(jobs, jobs_dir, source, empty_keys, [str(p) for p in paths], chunk_size)
+        json.dump(manifest, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+        print(
+            f"catalog-gaps: {len(jobs)} jobs, {len(items)} items, {len(empty_keys)} empty keys",
+            file=sys.stderr,
+        )
+        return 0
+    reports = build_reports(paths, locales, source, args.strict)
     json.dump(reports, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     total = sum(len(r.get("gaps") or []) for r in reports)

@@ -4,7 +4,7 @@ A skill that rewrites **user-facing copy** so it is written, short, and immediat
 
 Pipeline:
 
-**discover shards → find → verify → fix → review → fix (loop) → localize → commit → push**
+**discover shards → find → verify → fix → review → fix (loop) → localize (plan → translate → merge) → commit → push**
 
 It does not restyle developer logs, comments, identifiers, i18n keys, tests, or agent skill files. Every locale the project ships has to be complete when it finishes.
 
@@ -74,7 +74,7 @@ Commits use explicit pathspecs. Other dirty files in the tree are left alone.
 | PHP | `composer.json` | `php -l` |
 | Elixir | `mix.exs` | `mix compile` |
 
-Catalog formats the localizer completes (and `scripts/catalog-gaps.py` audits):
+Catalog formats the mergers complete (and `scripts/catalog-gaps.py` audits). Localization fans out: the gaps script emits one job per locale in chunks of at most 100 keys (`--emit-jobs --chunk-size 100`), a translator subagent handles each job, then one merger writes each catalog (every locale into one `.xcstrings` file).
 
 | Format | Layout |
 | --- | --- |
@@ -109,7 +109,7 @@ ui-copy-polish/
 ├── SKILL.md                         # Orchestrator (host-agnostic)
 ├── references/
 │   ├── copy-bar.md                  # Writing standard
-│   └── roles.md                     # Finder / verifier / fixer / reviewer / localizer / shipper
+│   └── roles.md                     # Finder / verifier / fixer / reviewer / planner / translator / merger / shipper
 ├── scripts/
 │   ├── discover-copy-shards.py      # Stack, dest, locale, and check discovery
 │   ├── catalog-gaps.py              # Incomplete keys across every catalog format
@@ -120,7 +120,7 @@ ui-copy-polish/
     └── ui-copy-polish.js            # Engine for Claude Code's Workflow tool
 ```
 
-On Grok, the orchestrator copies `workflows/ui-copy-polish.rhai` to `~/.grok/workflows/` and launches it by name. On Claude Code it launches `workflows/ui-copy-polish.js` through the `Workflow` tool. Anywhere else it reproduces the same phases with plain subagents.
+On Grok, the orchestrator copies `workflows/ui-copy-polish.rhai` to `~/.grok/workflows/` and launches it by name (`agent_budget: 256`). On Claude Code it launches `workflows/ui-copy-polish.js` through the `Workflow` tool. Anywhere else it reproduces the same phases with plain subagents.
 
 ## License
 
