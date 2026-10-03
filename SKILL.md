@@ -13,6 +13,7 @@ You are the orchestrator. Do not rewrite copy yourself. Discover shards, launch 
 | --- | --- |
 | Copy bar | `SKILL_DIR/references/copy-bar.md` |
 | Roles | `SKILL_DIR/references/roles.md` |
+| zh-Hans review | `SKILL_DIR/references/zh-hans-review-playbook.md` |
 | Discover | `SKILL_DIR/scripts/discover-copy-shards.py` |
 | Catalog gaps | `SKILL_DIR/scripts/catalog-gaps.py` |
 | Engine (Grok) | `SKILL_DIR/workflows/ui-copy-polish.rhai` |

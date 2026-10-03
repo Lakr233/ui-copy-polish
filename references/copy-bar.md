@@ -37,7 +37,11 @@ Applies when `zh-Hans` (or `zh-CN`, `zh`) is one of the project's locales.
 - 按钮短：创建、删除、重试、登录、选择团队。
 - 与英文同一意思，不要写成更长的解释。
 - 产品名与平台名保留原文：App Store、TestFlight、GitHub。其余用中文。
+- 系统动词跟随平台术语：拷贝（Copy）、存储（Save）、筛选（Filter）、载入（Load），不是 复制、保存、过滤、加载。
+- 平台专名照 Apple 写法：访达、“文件”App、描述文件、宗卷。社区专有名词不翻译（roothide、rootless、jbroot）。
 - 用中文标点。省略号用 `…`。
+
+深度审查（术语台账、占位符校验、`.xcstrings` 编辑规则）见 `zh-hans-review-playbook.md`。
 
 ## Other locales
 
