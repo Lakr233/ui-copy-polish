@@ -109,11 +109,14 @@ ui-copy-polish/
 ├── SKILL.md                         # Orchestrator (host-agnostic)
 ├── references/
 │   ├── copy-bar.md                  # Writing standard
-│   └── roles.md                     # Finder / verifier / fixer / reviewer / planner / translator / merger / shipper
+│   ├── roles.md                     # Finder / verifier / fixer / reviewer / planner / translator / merger / shipper
+│   ├── zh-hans-review-playbook.md   # zh-Hans / zh-Hant deep review, Apple official terms
+│   └── second-reader.md             # Optional second model (stateless, no tools)
 ├── scripts/
 │   ├── discover-copy-shards.py      # Stack, dest, locale, and check discovery
 │   ├── catalog-gaps.py              # Incomplete keys across every catalog format
 │   ├── xcstrings-gaps.py            # Compatibility shim → catalog-gaps.py
+│   ├── second-reader.py             # Ask a second model through opencode serve
 │   └── test_copy_scripts.py         # python3 scripts/test_copy_scripts.py
 └── workflows/
     ├── ui-copy-polish.rhai          # Engine for Grok

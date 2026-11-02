@@ -43,6 +43,17 @@ Applies when `zh-Hans` (or `zh-CN`, `zh`) is one of the project's locales.
 
 深度审查（术语台账、占位符校验、`.xcstrings` 编辑规则）见 `zh-hans-review-playbook.md`。
 
+## Traditional Chinese (`zh-Hant`)
+
+Applies when `zh-Hant` (or `zh-TW`, `zh-HK`) is one of the project's locales.
+
+- 書面 UI 用語；沿用目錄既有的台灣或香港用語，不要從簡體逐字轉換。
+- 平台用語跟隨 Apple 台灣：設定、拷貝、儲存、篩選、載入、檔案夾、建置版本、App 審查。
+- 引號用「」，巢狀用『』。省略號用 `…`。
+- 與 zh-Hans 同一個意思；兩者要各自地道。
+
+Field and status names on Apple platforms come from the per-locale App Store Connect help, not from memory — see the table in `zh-hans-review-playbook.md`.
+
 ## Other locales
 
 Every locale the project ships gets the same treatment: written UI register for that language, same meaning as the source, same length class, native punctuation, product and platform names untouched. Do not add a locale the project does not ship. Do not drop one it does.
