@@ -14,6 +14,7 @@ You are the orchestrator. Do not rewrite copy yourself. Discover shards, launch 
 | Copy bar | `SKILL_DIR/references/copy-bar.md` |
 | Roles | `SKILL_DIR/references/roles.md` |
 | zh-Hans review | `SKILL_DIR/references/zh-hans-review-playbook.md` |
+| Second reader | `SKILL_DIR/references/second-reader.md`, `SKILL_DIR/scripts/second-reader.py` |
 | Discover | `SKILL_DIR/scripts/discover-copy-shards.py` |
 | Catalog gaps | `SKILL_DIR/scripts/catalog-gaps.py` |
 | Engine (Grok) | `SKILL_DIR/workflows/ui-copy-polish.rhai` |
@@ -103,6 +104,10 @@ Reproduce the same phases with subagents. Cold-start every child: it must read t
 6. **Ship** — one agent with shell access. Intersect this run's files with `git status --porcelain`. Run the `checks` commands for each git root that changed (plus the gaps script). `git commit -m "…" -- <paths>`. Push `HEAD` if `push` is true.
 
 Wait for each panel to finish before starting the next phase. Do not repair unrelated build breakage. Do not touch dirty files this run did not change.
+
+## Second reader (optional)
+
+When the user asks for a second model's opinion (for example Gemini through OpenCode), give every catalog reviewer `second-reader.md` and the script path. The second reader gets text only — no tools — and disagreements follow its three-round rule. Platform terms are settled by the platform's own docs, not by either model.
 
 ## Hard rules
 

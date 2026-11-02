@@ -29,6 +29,27 @@ Tie-break order: platform glossary > in-repo majority > shorter form. For Apple 
 
 A stray that is 30–50% of the total means earlier translators never agreed; those are the highest-visibility fixes.
 
+**Look the platform term up; do not vote on it.** A catalog majority, the reviewing agent and a second model can all agree and still be wrong. On Apple platforms the App Store Connect help is published per locale — `developer.apple.com/cn/help/app-store-connect/…` (zh-Hans) and `/tw/help/…` (zh-Hant) — and its field and status names are the ones users see next to your app. Fetch the page; quote it in the ledger. Terms verified there on 2026-11-02:
+
+| en | zh-Hans | zh-Hant |
+| --- | --- | --- |
+| Promotional Text | 推广文本 | 行銷宣傳文字 |
+| Support URL / Marketing URL | 技术支持网址 / 营销网址 | 支援 URL / 行銷 URL |
+| What's New in This Version | 此版本的新增内容 | 此版本的新增功能 |
+| Screenshots / App Previews | 截屏 / App 预览 | 截圖 / App 預覽 |
+| metadata | 元数据 | 後設資料 |
+| build | 构建版本 | 建置版本 |
+| App Review | App 审核 | App 審查 |
+| Availability | 销售范围 | 供應狀況 |
+| Win-back offer | 回头客优惠 | 舊客戶優惠 |
+| Introductory / promotional offer | 推介促销优惠 / 促销优惠 | 試賣優惠 / 促銷優惠 |
+| Offer code / subscription group | 优惠代码 / 订阅群组 | 優惠碼 / 訂閱群組 |
+| Waiting for Review / In Review | 正在等待审核 / 正在审核 | 正在等待審查 / 審查中 |
+| Rejected / Metadata Rejected | 被拒绝 / 元数据被拒绝 | 已拒絕 / 後設資料被拒絕 |
+| Ready for Distribution / Pending Developer Release | 可分发 / 等待开发者发布 | 已可發佈 / 等待開發者發佈 |
+
+In the field run the in-repo majority and both models had chosen 宣传文本, 上架范围, 挽回优惠 / 赢回优惠, 螢幕截圖, 上架範圍, 推介優惠 and 中繼資料 — every one contradicted by the help pages. Save is the same story outside App Store Connect: the catalog majority was 保存, Apple's menus say 存储.
+
 ## 2. Run the cheap audits before and after
 
 Each is a few lines of Python over the parsed catalog. Run before (to find), after (to prove clean).
@@ -50,6 +71,14 @@ def specs(s):
 **CJK-adjacent placeholder spacing** — flag CJK directly touching a specifier, then whitelist the entries whose argument is itself a *localized* string (control names, category names). `正在设置%1$@…` with %1$@ = 音量 is correct without a space; `将于%@过期` with a date is not. Check the call site, not the pattern.
 
 **Half-width punctuation next to CJK**, **keys with no localization at all** (whole features silently falling back to English — six strings in the field case), and **empty-string keys** round out the sweep.
+
+## 2b. zh-Hant is its own locale
+
+Review zh-Hant in the same pass but against its own ledger, not as a character conversion of zh-Hans. First decide whether the catalog is Taiwan or Hong Kong usage (count 專案 / 項目, 網路 / 網絡, 影片 / 視頻) and keep the majority. Taiwan Apple UI: 設定、檔案、伺服器、登入、帳號、訊息、建置版本、拷貝、儲存、檔案夾. Quotes are 「」 with 『』 nested. Then check that each zh-Hans / zh-Hant pair says the same thing — the field run found Hant strings still translating an older English value.
+
+## 2c. The `en` value is not always the key
+
+In `.xcstrings` the key is the code literal, but the English UI shows the `en` localization when it exists. Earlier polish passes edit `en` values (Title Case, "Unable to…"), so 10% of keys may carry an `en` value that differs from the key. Translate the `en` value — that is what English readers see — and treat an `en` value that breaks the copy bar (session, "Please … retry") as a finding of its own.
 
 ## 3. Back ambiguous keys with code, not guesses
 
